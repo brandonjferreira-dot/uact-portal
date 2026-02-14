@@ -190,4 +190,46 @@ def show_maintenance():
     st.divider()
     
     # View Issues
-    data = ws
+    data = ws_maint.get_all_records()
+    df_maint = pd.DataFrame(data)
+    
+    if not df_maint.empty:
+        st.subheader("Current Issues")
+        st.dataframe(df_maint, use_container_width=True)
+        
+        # FOREMAN CONTROLS
+        if st.session_state.role == "Foreman":
+            st.markdown("### 👷 Foreman Actions")
+            open_tickets = df_maint[df_maint["Status"] == "Open"]
+            
+            if not open_tickets.empty:
+                c1, c2 = st.columns([3,1])
+                ticket = c1.selectbox("Select Issue to Close", open_tickets["Issue"])
+                if c2.button("Mark FIXED"):
+                    try:
+                        cell = ws_maint.find(ticket)
+                        ws_maint.update_cell(cell.row, 3, "Fixed")
+                        st.success("Ticket Closed.")
+                        st.rerun()
+                    except:
+                        st.error("Could not find ticket in row.")
+        else:
+            st.caption("🔒 Login as Foreman to close tickets.")
+            
+    else:
+        st.info("No active maintenance issues.")
+
+
+# --- MAIN NAVIGATION ---
+# Sidebar Menu
+render_login() # Show login box at bottom of sidebar
+menu = st.sidebar.radio("Navigation", ["🏠 Home", "📅 Shift Sign-Up", "🛠️ Shop Inventory", "🔧 Maintenance"])
+
+if menu == "🏠 Home":
+    show_home()
+elif menu == "📅 Shift Sign-Up":
+    show_shifts()
+elif menu == "🛠️ Shop Inventory":
+    show_inventory()
+elif menu == "🔧 Maintenance":
+    show_maintenance()
