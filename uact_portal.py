@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- CONFIGURATION & THEME ---
 st.set_page_config(
@@ -36,25 +36,21 @@ except:
 if 'role' not in st.session_state:
     st.session_state.role = "Volunteer"
 
-# --- HELPER: LOGIN SIDEBAR ---
-def render_login():
-    with st.sidebar:
-        st.divider()
-        if st.session_state.role == "Foreman":
-            st.success("👤 Logged in as: Foreman")
-            if st.button("Log Out"):
-                st.session_state.role = "Volunteer"
-                st.rerun()
-        else:
-            pwd = st.text_input("🔐 Foreman Access", type="password", placeholder="Enter Password")
-            if pwd == "fixit2026": # <--- CHANGE THIS PASSWORD IF NEEDED
+# --- HELPER: IN-PAGE LOGIN WIDGET ---
+def foreman_login_block():
+    """Renders a login box inside the page, not the sidebar."""
+    if st.session_state.role == "Foreman":
+        st.success("🔓 Foreman Mode Active")
+        if st.button("Log Out"):
+            st.session_state.role = "Volunteer"
+            st.rerun()
+    else:
+        with st.expander("🔐 Foreman Access (Click to Login)"):
+            pwd = st.text_input("Password", type="password", key="page_login")
+            if pwd == "fixit2026":  # <--- PASSWORD
                 st.session_state.role = "Foreman"
                 st.success("Access Granted!")
                 st.rerun()
-
-# --- HELPER: GET DATA ---
-def get_data(worksheet):
-    return pd.DataFrame(worksheet.get_data_all_records())
 
 # --- PAGE: LANDING DASHBOARD ---
 def show_home():
@@ -62,167 +58,145 @@ def show_home():
     st.markdown("*\"Getting older is mandatory, but growing up is optional.\"*")
     st.divider()
     
-    # Hero Section with Quick Actions
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.info("### 📅 Current Production")
         st.write("## **Sweeney Todd**")
-        st.caption("Directed by [Director Name]")
         st.write("Show Dates: Feb 14 - Mar 01")
     
     with col2:
         st.success("### 🎟️ Volunteer Call")
         st.write("We need **Ushers** for opening night!")
         if st.button("Sign Up Now"):
-            st.session_state.page = "Shifts"
+            st.session_state.page = "Shifts" # Note: Requires page state handling to jump
             st.rerun()
 
     with col3:
         st.warning("### 🔧 Facility Status")
-        # Quick check of open tickets
-        maint_data = ws_maint.get_all_records()
-        open_cnt = len([x for x in maint_data if x.get("Status") == "Open"])
-        st.metric("Open Maint. Tickets", open_cnt)
-        if open_cnt > 0:
-            st.caption("Please check the log.")
+        data = ws_maint.get_all_records()
+        open_cnt = len([x for x in data if x.get("Status") == "Open"])
+        st.metric("Open Tickets", open_cnt)
 
 # --- PAGE: SHIFT SIGN UP ---
 def show_shifts():
     st.title("📅 Volunteer Shift Sign-Up")
     
     df_shifts = pd.DataFrame(ws_shifts.get_all_records())
-    
     if df_shifts.empty:
-        st.info("No shifts loaded yet.")
+        st.info("No shifts loaded.")
         return
 
-    # Clean and Sort Data
     df_shifts['Date'] = pd.to_datetime(df_shifts['Date'])
     today = pd.Timestamp.now()
     
-    # Filter: Only show future open shifts
     open_shifts = df_shifts[
         (df_shifts["Volunteer"] == "Open") & 
         (df_shifts["Date"] >= today)
     ].sort_values("Date")
     
     if open_shifts.empty:
-        st.success("All upcoming shifts are filled! You guys rock. 🎸")
+        st.success("All upcoming shifts are filled!")
     else:
-        st.write(f"Showing **{len(open_shifts)}** open opportunities.")
+        st.write(f"**{len(open_shifts)}** open opportunities.")
         for index, row in open_shifts.iterrows():
             with st.expander(f"{row['Date'].strftime('%a, %b %d')} - {row['Role']}"):
                 c1, c2 = st.columns([3, 1])
-                name = c1.text_input("Your Name", key=f"n_{index}")
-                phone = c1.text_input("Phone Number", key=f"p_{index}")
+                name = c1.text_input("Name", key=f"n_{index}")
+                phone = c1.text_input("Phone", key=f"p_{index}")
                 
-                if c2.button("Claim Shift", key=f"btn_{index}"):
+                if c2.button("Claim", key=f"btn_{index}"):
                     if name:
-                        # Find row in sheet (simplistic lookup)
                         cell = ws_shifts.find(row['Date'].strftime('%Y-%m-%d'))
-                        # Note: In production, using a unique ID column is safer
-                        row_num = cell.row 
-                        
-                        # Verify it's the right role row (handling multiple roles on same date)
-                        # This logic assumes the order hasn't changed. 
-                        # Ideally, add a hidden ID column to your sheet.
-                        
-                        ws_shifts.update_cell(row_num, 3, name)   
-                        ws_shifts.update_cell(row_num, 4, phone)
+                        ws_shifts.update_cell(cell.row, 3, name)   
+                        ws_shifts.update_cell(cell.row, 4, phone)
                         st.balloons()
-                        st.success("✅ Shift Claimed! Thank you.")
+                        st.success("✅ Shift Claimed!")
                         st.rerun()
-                    else:
-                        st.error("Please enter your name.")
 
-# --- PAGE: INVENTORY ---
+# --- PAGE: INVENTORY (LOGIN MOVED HERE) ---
 def show_inventory():
     st.title("🛠️ Shop Inventory")
     
+    # 1. LOGIN BLOCK (Only shows if not logged in)
+    foreman_login_block()
+    st.divider()
+
     df_inv = pd.DataFrame(ws_inventory.get_all_records())
     
-    tab1, tab2 = st.tabs(["📋 View Stock", "➕ Add Item"])
-    
-    with tab1:
-        st.write("Check 'Restock' to flag items for the Technical Director.")
+    # 2. IF FOREMAN: Show Edit Controls
+    if st.session_state.role == "Foreman":
+        st.subheader("📝 Manage Stock (Foreman Mode)")
         
-        # FOREMAN MODE: Editable Table
-        if st.session_state.role == "Foreman":
+        tab1, tab2 = st.tabs(["Update Quantities", "Add New Item"])
+        
+        with tab1:
             edited_df = st.data_editor(df_inv, num_rows="dynamic", key="inv_edit")
-            if st.button("💾 Save Changes (Foreman Only)"):
+            if st.button("💾 Save Changes to DB"):
                 ws_inventory.clear()
                 ws_inventory.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
-                st.success("Inventory Database Updated!")
+                st.success("Database Updated!")
         
-        # VOLUNTEER MODE: Read Only
-        else:
-            st.dataframe(df_inv)
-            st.info("🔒 Login as Foreman to edit stock levels.")
+        with tab2:
+            c1, c2, c3 = st.columns(3)
+            new_item = c1.text_input("Item Name")
+            new_cat = c2.selectbox("Category", ["Lumber", "Paint", "Tools", "Hardware", "Consumables"])
+            new_qty = c3.number_input("Qty", min_value=0, value=1)
+            if st.button("Add Item"):
+                ws_inventory.append_row([new_item, new_cat, new_qty, "FALSE"])
+                st.success("Added!")
+                st.rerun()
 
-    with tab2:
-        c1, c2, c3 = st.columns(3)
-        new_item = c1.text_input("Item Name")
-        new_cat = c2.selectbox("Category", ["Lumber", "Paint", "Tools", "Hardware", "Consumables"])
-        new_qty = c3.number_input("Qty", min_value=0, value=1)
-        
-        if st.button("Add New Item"):
-            ws_inventory.append_row([new_item, new_cat, new_qty, "FALSE"])
-            st.success(f"Added {new_item} to the list.")
+    # 3. IF VOLUNTEER: Read-Only View
+    else:
+        st.subheader("📋 Current Stock Level")
+        st.dataframe(df_inv)
+        st.caption("Need to update this? Login above as Foreman.")
 
 # --- PAGE: MAINTENANCE ---
 def show_maintenance():
     st.title("🔧 Maintenance Log")
     
+    # Login block here too (optional, but helpful if they went here first)
+    if st.session_state.role != "Foreman":
+        with st.expander("🔐 Foreman Login (To Close Tickets)"):
+            pwd = st.text_input("Password", type="password", key="maint_login")
+            if pwd == "fixit2026":
+                st.session_state.role = "Foreman"
+                st.rerun()
+
     # Reporting Form (Public)
-    with st.expander("📝 Report a New Issue", expanded=True):
+    with st.expander("📝 Report Issue", expanded=True):
         with st.form("maint_form"):
-            c1, c2 = st.columns(2)
-            issue = c1.text_input("What is broken/needs attention?")
-            loc = c2.selectbox("Location", ["Lobby", "Stage", "Shop", "Booth", "Green Room", "Exterior"])
-            submitted = st.form_submit_button("Report Issue")
-            if submitted and issue:
+            issue = st.text_input("Issue?")
+            loc = st.selectbox("Location", ["Lobby", "Stage", "Shop", "Booth"])
+            if st.form_submit_button("Report"):
                 ts = datetime.now().strftime("%Y-%m-%d")
                 ws_maint.append_row([issue, loc, "Open", "User", ts])
-                st.success("Reported! The Tech Director has been notified.")
+                st.success("Reported!")
                 st.rerun()
     
-    st.divider()
-    
-    # View Issues
+    # List Issues
     data = ws_maint.get_all_records()
     df_maint = pd.DataFrame(data)
     
     if not df_maint.empty:
-        st.subheader("Current Issues")
         st.dataframe(df_maint, use_container_width=True)
         
-        # FOREMAN CONTROLS
+        # Foreman Action Button
         if st.session_state.role == "Foreman":
-            st.markdown("### 👷 Foreman Actions")
+            st.divider()
+            st.write("### 👷 Foreman Actions")
             open_tickets = df_maint[df_maint["Status"] == "Open"]
-            
             if not open_tickets.empty:
-                c1, c2 = st.columns([3,1])
-                ticket = c1.selectbox("Select Issue to Close", open_tickets["Issue"])
-                if c2.button("Mark FIXED"):
-                    try:
-                        cell = ws_maint.find(ticket)
-                        ws_maint.update_cell(cell.row, 3, "Fixed")
-                        st.success("Ticket Closed.")
-                        st.rerun()
-                    except:
-                        st.error("Could not find ticket in row.")
-        else:
-            st.caption("🔒 Login as Foreman to close tickets.")
-            
-    else:
-        st.info("No active maintenance issues.")
+                ticket = st.selectbox("Select Ticket", open_tickets["Issue"])
+                if st.button("Mark Fixed"):
+                    cell = ws_maint.find(ticket)
+                    ws_maint.update_cell(cell.row, 3, "Fixed")
+                    st.success("Closed!")
+                    st.rerun()
 
-
-# --- MAIN NAVIGATION ---
-# Sidebar Menu
-render_login() # Show login box at bottom of sidebar
+# --- NAVIGATION ---
 menu = st.sidebar.radio("Navigation", ["🏠 Home", "📅 Shift Sign-Up", "🛠️ Shop Inventory", "🔧 Maintenance"])
 
 if menu == "🏠 Home":
